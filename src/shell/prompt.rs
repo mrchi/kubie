@@ -63,6 +63,11 @@ where
     fn start_color(&self, f: &mut fmt::Formatter, color: u32) -> fmt::Result {
         match self.shell_kind {
             ShellKind::Xonsh => self.isolate(f, format!("\\033[{color}m")),
+            // Fish needs the literal color sequences quoted: unquoted `\e[31m`
+            // parses as a glob bracket expression, which fish >= 4.9 rejects
+            // with "square brackets do not match". Command substitutions in the
+            // prompt stay unquoted so fish executes them.
+            ShellKind::Fish => self.isolate(f, format!("\"\\e[{color}m\"")),
             _ => self.isolate(f, format!("\\e[{color}m")),
         }
     }
@@ -70,6 +75,7 @@ where
     fn end_color(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.shell_kind {
             ShellKind::Xonsh => self.isolate(f, "\\033[0m"),
+            ShellKind::Fish => self.isolate(f, "\"\\e[0m\""),
             _ => self.isolate(f, "\\e[0m"),
         }
     }
@@ -120,5 +126,46 @@ pub fn generate_ps1(settings: &Settings, depth: u32, shell_kind: ShellKind) -> S
         parts.push(Color::new(BLUE, depth, shell_kind).to_string());
     }
 
-    format!("[{}]", parts.join("|"))
+    match shell_kind {
+        // Quote the surrounding brackets and separators for fish, for the same
+        // reason the color sequences are quoted above.
+        ShellKind::Fish => format!("\"[\"{}\"]\"", parts.join("\"|\"")),
+        _ => format!("[{}]", parts.join("|")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fish_prompt_quotes_literals_but_keeps_command_substitutions_unquoted() {
+        let prompt = generate_ps1(&Settings::default(), 2, ShellKind::Fish);
+
+        // Literal segments (colors, separators, brackets) must be quoted so fish
+        // >= 4.9 does not parse the unquoted prompt as a glob bracket expression.
+        assert!(prompt.starts_with("\"[\""), "expected quoted '[', got: {prompt}");
+        assert!(
+            prompt.contains("\"\\e[31m\""),
+            "expected quoted color escape, got: {prompt}"
+        );
+
+        // Command substitutions must stay unquoted so fish actually executes
+        // `kubie info ctx` / `kubie info ns` instead of printing them literally.
+        assert!(
+            prompt.contains("info ctx)\""),
+            "expected unquoted ctx command substitution, got: {prompt}"
+        );
+        assert!(
+            prompt.contains("info ns)\""),
+            "expected unquoted ns command substitution, got: {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_non_fish_prompt_is_unaffected() {
+        let prompt = generate_ps1(&Settings::default(), 2, ShellKind::Bash);
+        assert!(prompt.contains("\\e[31m"), "got: {prompt}");
+        assert!(!prompt.contains("\"\\e[31m\""), "got: {prompt}");
+    }
 }
