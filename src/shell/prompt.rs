@@ -53,7 +53,11 @@ where
         E: Display,
     {
         match self.shell_kind {
-            ShellKind::Fish | ShellKind::Xonsh => write!(f, "{content}"),
+            // Fish treats an unquoted prompt as a glob, so the '[' of an escape
+            // sequence breaks parsing. Quoting also keeps \e literal, because
+            // the fish prompt function passes it through `string unescape`.
+            ShellKind::Fish => write!(f, "\"{content}\""),
+            ShellKind::Xonsh => write!(f, "{content}"),
             ShellKind::Zsh => write!(f, "%{{{content}%}}"),
             ShellKind::Bash => write!(f, "\\[{content}\\]"),
             _ => write!(f, "{content}"),
@@ -120,5 +124,10 @@ pub fn generate_ps1(settings: &Settings, depth: u32, shell_kind: ShellKind) -> S
         parts.push(Color::new(BLUE, depth, shell_kind).to_string());
     }
 
-    format!("[{}]", parts.join("|"))
+    match shell_kind {
+        // Fish needs the literal brackets and separators quoted, otherwise the
+        // prompt expression does not parse.
+        ShellKind::Fish => format!("\"[\"{}\"]\"", parts.join("\"|\"")),
+        _ => format!("[{}]", parts.join("|")),
+    }
 }
